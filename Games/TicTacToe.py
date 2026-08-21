@@ -1,4 +1,4 @@
-from random import *
+﻿from random import *
 
 
 class Board:
@@ -154,7 +154,7 @@ class Board:
                 if self.state[2] == 0:
                     cellT = 3
                     break
-	    
+
             if self.state[0] == 2 and self.state[1] == 2:
                 if self.state[2] == 0:
                     cellT = 3
@@ -263,9 +263,9 @@ class Player:
 
 
 class Ki(Player):
-	def __init__(self, symbol, name):
-		self.symbol = symbol
-		self.name = name
+    def __init__(self, symbol, name):
+        self.symbol = symbol
+        self.name = name
 
 
 
@@ -282,12 +282,12 @@ def one_player():
         print('\n' + str(active_player.name) + 's turn') 
         if active_player == player_b:
             try:
-            	cell = int(input("Where do you wnat to place your sign? [1-9]" ))
+                cell = int(input("Where do you wnat to place your sign? [1-9]" ))
             except ValueError:
-            	continue	    	
+                continue
         else:
-        	cell = board.ai_check_win()
-        	
+            cell = board.ai_check_win()
+
         print("cell = " + str(cell))
         cell = cell - 1
         if cell < 0 or cell > 8:
