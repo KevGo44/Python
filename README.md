@@ -1,5 +1,8 @@
 # Python
 
+![Python](https://img.shields.io/badge/Python-3.10+-blue)
+![Dependencies](https://img.shields.io/badge/dependencies-stdlib_only-green)
+
 ## Inhalt
 
 - [Python](#python)
